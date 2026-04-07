@@ -1,0 +1,18 @@
+[Heatline Pi 현장등록 - 바탕화면 버전 사용법]
+
+1. 폴더 전체를 라즈베리파이에 복사합니다.
+2. 터미널에서 폴더로 이동합니다.
+3. 아래 명령 실행:
+   chmod +x install_to_desktop.sh
+   ./install_to_desktop.sh
+4. 바탕화면에 'Heatline Pi 현장등록' 아이콘이 생깁니다.
+5. 아이콘을 더블클릭합니다.
+6. DEVICE_SERIAL, PROVISION_KEY 입력 후
+   [저장 + 재시작 + 확인] 버튼을 누릅니다.
+7. 성공하면 [Pi 서버 열기 (/docs)] 버튼을 눌러 서버 화면을 엽니다.
+
+[참고]
+- 기본 ENV 경로: /home/pi/heatline-pi-fastapi/.env
+- 기본 서비스명: heatline-pi-fastapi
+- tkinter가 없으면:
+  sudo apt-get update && sudo apt-get install -y python3-tk
