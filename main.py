@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import threading
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
@@ -12,7 +16,6 @@ from .central_sync import central_sync_service
 from .config import settings
 from .db import (
     delete_manual_schedule,
-    get_manual_schedule,
     init_db,
     insert_control_log,
     insert_event,
@@ -26,6 +29,7 @@ from .db import (
     upsert_manual_schedule,
     utc_now,
 )
+from .gpio_relay import heater_relay_controller
 from .local_schedule import local_schedule_service
 from .models import (
     ApiResponse,
@@ -42,31 +46,10 @@ from .models import (
 from .state import runtime_state
 
 
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    init_db()
-    camera_service.start()
-    central_sync_service.start()
-    local_schedule_service.start()
-    yield
-    local_schedule_service.stop()
-    central_sync_service.stop()
-    camera_service.stop()
+GPIO_SYNC_INTERVAL_SEC = max(0.2, float(os.getenv("HEATER_RELAY_SYNC_INTERVAL_SEC", "1.0")))
+_gpio_sync_stop = threading.Event()
+_gpio_sync_thread: threading.Thread | None = None
 
-
-app = FastAPI(
-    title="Heatline Raspberry Pi Backend",
-    version="1.2.0",
-    lifespan=lifespan,
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 def runtime_policy() -> dict:
@@ -80,6 +63,193 @@ def runtime_policy() -> dict:
     )
 
 
+
+def _requester_values(payload: CommandPayload) -> tuple[str | None, str | None]:
+    requester = payload.requested_by or None
+    return (
+        requester.user_id if requester else None,
+        requester.user_name if requester else None,
+    )
+
+
+
+def _write_command_log(payload: CommandPayload, result: str, note: str) -> None:
+    user_id, user_name = _requester_values(payload)
+    insert_control_log(
+        command_type=payload.command_type,
+        command_value=payload.command_value,
+        result=result,
+        note=note,
+        requested_by_user_id=user_id,
+        requested_by_user_name=user_name,
+    )
+
+
+
+def _sync_relay_from_runtime(*, force: bool = False, source: str = "runtime") -> dict:
+    snapshot = runtime_state.snapshot()
+    relay_status = heater_relay_controller.sync_from_runtime(snapshot, force=force)
+    snapshot_after = runtime_state.apply_status(
+        {
+            "status": "online",
+            "message": f"relay sync ok ({source})",
+        }
+    )
+    return {
+        "runtime": snapshot_after,
+        "relay": relay_status,
+    }
+
+
+
+def _mark_relay_error(exc: Exception, *, source: str) -> dict:
+    relay_status = heater_relay_controller.fail(exc)
+    runtime = runtime_state.apply_status(
+        {
+            "status": "error",
+            "message": f"GPIO relay error ({source}): {exc}",
+        }
+    )
+    return {
+        "runtime": runtime,
+        "relay": relay_status,
+    }
+
+
+
+def _restore_runtime_snapshot(previous: dict, message: str) -> dict:
+    return runtime_state.apply_status(
+        {
+            "status": previous.get("status", "online"),
+            "heater_on": bool(previous.get("heater_on", False)),
+            "heater_mode": previous.get("heater_mode", "auto"),
+            "offline_mode": bool(previous.get("offline_mode", False)),
+            "current_control_source": previous.get("current_control_source", "idle"),
+            "active_schedule_name": previous.get("active_schedule_name"),
+            "last_schedule_sync_at": previous.get("last_schedule_sync_at"),
+            "snow_threshold": previous.get("snow_threshold", settings.snow_threshold),
+            "temperature": previous.get("temperature"),
+            "humidity": previous.get("humidity"),
+            "camera_url": previous.get("camera_url"),
+            "message": message,
+        }
+    )
+
+
+
+def _maybe_request_reboot(payload: CommandPayload) -> None:
+    if payload.command_type != "REBOOT":
+        return
+
+    def _worker() -> None:
+        time.sleep(1.0)
+        try:
+            subprocess.Popen(["sudo", "reboot"])
+        except Exception as exc:  # pragma: no cover - depends on host OS
+            insert_event(
+                event_type="REBOOT_FAILED",
+                message=f"reboot command failed: {exc}",
+                severity="critical",
+                payload={"command_type": payload.command_type},
+            )
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+
+def _gpio_sync_loop() -> None:
+    last_desired: bool | None = None
+    last_error: str | None = None
+
+    while not _gpio_sync_stop.wait(GPIO_SYNC_INTERVAL_SEC):
+        snapshot = runtime_state.snapshot()
+        desired = bool(snapshot.get("heater_on"))
+        try:
+            if last_desired is None or desired != last_desired:
+                heater_relay_controller.sync_from_runtime(snapshot, force=(last_desired is None))
+                last_desired = desired
+                last_error = None
+        except Exception as exc:  # pragma: no cover - hardware dependent
+            message = str(exc)
+            _mark_relay_error(exc, source="background-sync")
+            if message != last_error:
+                insert_event(
+                    event_type="GPIO_SYNC_ERROR",
+                    message=f"GPIO relay sync failed: {message}",
+                    severity="critical",
+                    payload={
+                        "desired_heater_on": desired,
+                        "source": "background-sync",
+                    },
+                )
+                last_error = message
+
+
+
+def _start_gpio_sync_thread() -> None:
+    global _gpio_sync_thread
+    if _gpio_sync_thread and _gpio_sync_thread.is_alive():
+        return
+    _gpio_sync_stop.clear()
+    _gpio_sync_thread = threading.Thread(target=_gpio_sync_loop, daemon=True)
+    _gpio_sync_thread.start()
+
+
+
+def _stop_gpio_sync_thread() -> None:
+    _gpio_sync_stop.set()
+    if _gpio_sync_thread and _gpio_sync_thread.is_alive():
+        _gpio_sync_thread.join(timeout=2)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    init_db()
+    try:
+        heater_relay_controller.initialize()
+        heater_relay_controller.sync_from_runtime(runtime_state.snapshot(), force=True)
+        insert_event(
+            event_type="GPIO_READY",
+            message="GPIO relay controller initialized",
+            severity="info",
+            payload=heater_relay_controller.status(),
+        )
+    except Exception as exc:
+        _mark_relay_error(exc, source="startup")
+        insert_event(
+            event_type="GPIO_INIT_FAILED",
+            message=f"GPIO relay controller init failed: {exc}",
+            severity="critical",
+            payload=heater_relay_controller.status(),
+        )
+
+    _start_gpio_sync_thread()
+    camera_service.start()
+    central_sync_service.start()
+    local_schedule_service.start()
+    yield
+    _stop_gpio_sync_thread()
+    local_schedule_service.stop()
+    central_sync_service.stop()
+    camera_service.stop()
+    heater_relay_controller.close()
+
+
+app = FastAPI(
+    title="Heatline Raspberry Pi Backend",
+    version="1.3.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 @app.get("/health")
 def health_check():
     snapshot = runtime_state.snapshot()
@@ -90,9 +260,16 @@ def health_check():
         "device_id": settings.device_id,
         "status": snapshot["status"],
         "heater_mode": snapshot["heater_mode"],
+        "heater_on": snapshot["heater_on"],
         "offline_mode": snapshot["offline_mode"],
         "active_schedule_name": snapshot.get("active_schedule_name"),
+        "relay": heater_relay_controller.status(),
     }
+
+
+@app.get("/api/v1/gpio/relay", response_model=ApiResponse)
+def get_gpio_relay_status():
+    return ApiResponse(data=heater_relay_controller.status())
 
 
 @app.get("/api/v1/device/info", response_model=DeviceInfoResponse)
@@ -140,7 +317,12 @@ def update_status(
     _: str = Depends(verify_device_token),
 ):
     state = runtime_state.apply_status(payload)
-    return ApiResponse(message="status updated", data=state)
+    try:
+        relay = heater_relay_controller.sync_from_runtime(state)
+    except Exception as exc:  # pragma: no cover - hardware dependent
+        relay_state = _mark_relay_error(exc, source="status-update")
+        return ApiResponse(message="status updated but relay sync failed", data=relay_state)
+    return ApiResponse(message="status updated", data={"runtime": state, "relay": relay})
 
 
 @app.post("/api/v1/internal/status", response_model=ApiResponse)
@@ -156,7 +338,12 @@ def update_internal_status(
             severity="info",
             payload=payload.model_dump(),
         )
-    return ApiResponse(message="internal status updated", data=state)
+    try:
+        relay = heater_relay_controller.sync_from_runtime(state)
+    except Exception as exc:  # pragma: no cover - hardware dependent
+        relay_state = _mark_relay_error(exc, source="internal-status")
+        return ApiResponse(message="internal status updated but relay sync failed", data=relay_state)
+    return ApiResponse(message="internal status updated", data={"runtime": state, "relay": relay})
 
 
 @app.post("/api/v1/heartbeat", response_model=ApiResponse)
@@ -194,10 +381,13 @@ def get_manual_schedules():
 @app.get("/api/v1/manual-schedules/summary", response_model=ApiResponse)
 def get_manual_schedules_summary():
     summary = summarize_manual_schedules()
-    summary.update({
-        "runtime": runtime_state.snapshot(),
-        "policy": runtime_policy(),
-    })
+    summary.update(
+        {
+            "runtime": runtime_state.snapshot(),
+            "policy": runtime_policy(),
+            "relay": heater_relay_controller.status(),
+        }
+    )
     return ApiResponse(data=summary)
 
 
@@ -246,6 +436,8 @@ def send_command(
     payload: CommandPayload,
     _: str = Depends(verify_device_token),
 ):
+    before_snapshot = runtime_state.snapshot()
+
     if payload.command_type == "SYNC_MANUAL_SCHEDULES":
         schedules = (payload.command_value or {}).get("schedules", []) if isinstance(payload.command_value, dict) else []
         replace_central_manual_schedules(schedules)
@@ -264,21 +456,41 @@ def send_command(
         save_state("runtime_policy", current)
 
     result = runtime_state.apply_command(payload)
-    requester = payload.requested_by or None
-    insert_control_log(
-        command_type=payload.command_type,
-        command_value=payload.command_value,
-        result="accepted",
-        note=result["note"],
-        requested_by_user_id=requester.user_id if requester else None,
-        requested_by_user_name=requester.user_name if requester else None,
-    )
+
+    try:
+        if payload.command_type in {"HEATER_ON", "HEATER_OFF"}:
+            relay_bundle = _sync_relay_from_runtime(force=True, source=payload.command_type)
+            result["relay"] = relay_bundle["relay"]
+            result["state"] = relay_bundle["runtime"]
+        else:
+            result["relay"] = heater_relay_controller.status()
+    except Exception as exc:  # pragma: no cover - hardware dependent
+        restored = _restore_runtime_snapshot(before_snapshot, f"GPIO relay command failed: {exc}")
+        relay_state = _mark_relay_error(exc, source=f"command:{payload.command_type}")
+        _write_command_log(payload, "failed", str(exc))
+        insert_event(
+            event_type="GPIO_COMMAND_FAILED",
+            message=f"{payload.command_type} failed: {exc}",
+            severity="critical",
+            payload={
+                "command": payload.model_dump(),
+                "restored_state": restored,
+                "relay": relay_state["relay"],
+            },
+        )
+        raise HTTPException(status_code=500, detail=f"GPIO relay command failed: {exc}")
+
+    _write_command_log(payload, "accepted", result["note"])
     insert_event(
         event_type="COMMAND_ACCEPTED",
         message=result["note"],
         severity="info",
-        payload=payload.model_dump(),
+        payload={
+            **payload.model_dump(),
+            "relay": result.get("relay"),
+        },
     )
+    _maybe_request_reboot(payload)
     return ApiResponse(message="command accepted", data=result)
 
 
