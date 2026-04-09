@@ -1,0 +1,30 @@
+[Heatline Pi 원클릭 설정 사용법]
+
+이 프로그램은 현장 작업자가 터미널 없이 바탕화면 아이콘 더블클릭으로 실행하는 용도입니다.
+
+기능:
+- DEVICE_SERIAL 입력
+- PROVISION_KEY 입력
+- .env 저장
+- systemctl enable (시작프로그램 등록)
+- systemctl restart
+- /health 확인
+- /api/v1/provision/status 확인
+- /docs 브라우저 열기
+
+설치:
+1. 폴더 전체를 라즈베리파이에 복사
+2. 가능하면 /home/pi/heatline-pi-oneclick-ui 위치에 둠
+3. 한 번만 install_to_desktop.sh 실행하면 바탕화면 아이콘 생성
+
+실행:
+- 바탕화면의 'Heatline Pi 원클릭설정' 아이콘 더블클릭
+- DEVICE_SERIAL 입력
+- PROVISION_KEY 입력
+- [적용하기] 클릭
+- 완료 후 [서버 열기 (/docs)] 클릭
+
+참고:
+- 기본 ENV 파일: /home/pi/heatline-pi-fastapi/.env
+- 기본 서비스명: heatline-pi-fastapi
+- tkinter가 없으면 python3-tk 설치 필요

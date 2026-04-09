@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Heatline Pi 원클릭설정
+Comment=DEVICE_SERIAL/PROVISION_KEY 입력 후 env 저장, 시작프로그램 등록, 재시작, 확인
+Exec=/bin/bash -lc 'cd ~/heatline-pi-oneclick-ui && ./run_heatline_pi_oneclick.sh'
+Path=/home/pi/heatline-pi-oneclick-ui
+Terminal=false
+Categories=Utility;
+StartupNotify=true
+Icon=preferences-system
