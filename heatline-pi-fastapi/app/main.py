@@ -5,10 +5,11 @@ import subprocess
 import threading
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from .auth import verify_device_token, verify_internal_token
 from .camera import camera_service
@@ -49,7 +50,8 @@ from .state import runtime_state
 GPIO_SYNC_INTERVAL_SEC = max(0.2, float(os.getenv("HEATER_RELAY_SYNC_INTERVAL_SEC", "1.0")))
 _gpio_sync_stop = threading.Event()
 _gpio_sync_thread: threading.Thread | None = None
-
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+CONTROL_PAGE = STATIC_DIR / "device-control.html"
 
 
 def runtime_policy() -> dict:
@@ -250,6 +252,12 @@ app.add_middleware(
 )
 
 
+@app.get("/", include_in_schema=False)
+@app.get("/ui", include_in_schema=False)
+def device_control_page():
+    return FileResponse(CONTROL_PAGE)
+
+
 @app.get("/health")
 def health_check():
     snapshot = runtime_state.snapshot()
@@ -437,6 +445,9 @@ def send_command(
     _: str = Depends(verify_device_token),
 ):
     before_snapshot = runtime_state.snapshot()
+
+    if payload.command_type in {"HEATER_ON", "HEATER_OFF"} and str(before_snapshot.get("heater_mode") or "").lower() != "manual":
+        raise HTTPException(status_code=409, detail="수동 모드에서만 열선 ON/OFF 명령이 가능합니다.")
 
     if payload.command_type == "SYNC_MANUAL_SCHEDULES":
         schedules = (payload.command_value or {}).get("schedules", []) if isinstance(payload.command_value, dict) else []
