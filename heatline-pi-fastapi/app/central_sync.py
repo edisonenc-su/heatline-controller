@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import threading
-import time
 from typing import Any
 
 import requests
@@ -15,7 +14,6 @@ class CentralSyncService:
     def __init__(self) -> None:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
-        self._last_success_monotonic = time.monotonic()
 
     def start(self) -> None:
         if not settings.central_api_base:
@@ -48,12 +46,10 @@ class CentralSyncService:
             "camera_url": snapshot.get("camera_url"),
             "snow_threshold": snapshot.get("snow_threshold"),
             "heater_mode": snapshot.get("heater_mode"),
-            "offline_mode": snapshot.get("offline_mode"),
-            "current_control_source": snapshot.get("current_control_source"),
-            "active_schedule_name": snapshot.get("active_schedule_name"),
-            "last_schedule_sync_at": snapshot.get("last_schedule_sync_at"),
             "last_seen_at": snapshot.get("last_seen_at"),
             "device_api_base": settings.device_api_base,
+            "public_base_url": settings.public_base_url or None,
+            "stream_type": "mjpeg",
         }
         requests.put(
             url,
@@ -66,13 +62,7 @@ class CentralSyncService:
         while not self._stop.is_set():
             try:
                 self._push_once()
-                self._last_success_monotonic = time.monotonic()
-                runtime_state.set_central_connection(True, offline_mode=False, message="central sync ok")
             except Exception as exc:  # pragma: no cover
-                offline_mode = False
-                if settings.offline_fallback_enabled:
-                    offline_mode = (time.monotonic() - self._last_success_monotonic) >= max(10, settings.offline_grace_sec)
-                runtime_state.set_central_connection(False, offline_mode=offline_mode, message=str(exc))
                 insert_event(
                     event_type="CENTRAL_SYNC_FAILED",
                     message=str(exc),

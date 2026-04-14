@@ -53,19 +53,9 @@ class Settings:
 
     central_api_base: str = os.getenv("CENTRAL_API_BASE", "").rstrip("/")
     central_device_token: str = os.getenv("CENTRAL_DEVICE_TOKEN", "")
-    device_sync_token: str = os.getenv("DEVICE_SYNC_TOKEN", "")
-    pairing_enabled: bool = _to_bool(os.getenv("PAIRING_ENABLED"), True)
-    provision_key: str = os.getenv("PROVISION_KEY", "")
-    central_controller_id: int = int(os.getenv("CENTRAL_CONTROLLER_ID", "0"))
-    firmware_version: str = os.getenv("FIRMWARE_VERSION", "")
-    hardware_model: str = os.getenv("HARDWARE_MODEL", "")
     public_base_url: str = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
     pi_public_host: str = os.getenv("PI_PUBLIC_HOST", "").strip()
     sync_interval_sec: int = int(os.getenv("SYNC_INTERVAL_SEC", "15"))
-
-    schedule_poll_interval_sec: int = int(os.getenv("SCHEDULE_POLL_INTERVAL_SEC", "15"))
-    offline_fallback_enabled: bool = _to_bool(os.getenv("OFFLINE_FALLBACK_ENABLED"), True)
-    offline_grace_sec: int = int(os.getenv("OFFLINE_GRACE_SEC", "90"))
 
     data_dir: Path = Path(os.getenv("DATA_DIR", "./data"))
     sqlite_path: Path = Path(os.getenv("SQLITE_PATH", "./data/pi_device.db"))
@@ -77,10 +67,14 @@ class Settings:
     @property
     def stream_url(self) -> str:
         path = self.stream_path if self.stream_path.startswith("/") else f"/{self.stream_path}"
+        if self.public_base_url:
+            return f"{self.public_base_url}{path}"
         return f"http://{self.public_host}:{self.pi_api_port}{path}"
 
     @property
     def device_api_base(self) -> str:
+        if self.public_base_url:
+            return f"{self.public_base_url}/api/v1"
         return f"http://{self.public_host}:{self.pi_api_port}/api/v1"
 
 
