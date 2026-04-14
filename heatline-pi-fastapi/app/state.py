@@ -12,13 +12,8 @@ class DeviceRuntimeState:
     def __init__(self) -> None:
         self._lock = Lock()
         persisted = load_state("device_status", default=None)
-        self._state = persisted or self._default_state()
-        self._state.setdefault("camera_url", settings.stream_url)
-        self._state.setdefault("device_api_base", settings.device_api_base)
-        self._state.setdefault("allow_customer_control", settings.allow_customer_control)
-        self._state.setdefault("last_seen_at", utc_now())
-        self._state.setdefault("message", "Pi backend booted")
-        save_state("device_status", self._state)
+        self._state = self._normalize_state(persisted)
+        self._save()
 
     def _default_state(self) -> dict[str, Any]:
         return {
@@ -51,21 +46,45 @@ class DeviceRuntimeState:
             "message": "ready",
         }
 
+    def _normalize_state(self, state: dict[str, Any] | None) -> dict[str, Any]:
+        normalized = self._default_state()
+        if isinstance(state, dict):
+            normalized.update(state)
+
+        normalized["id"] = settings.device_id
+        normalized["customer_id"] = settings.customer_id
+        normalized["controller_name"] = settings.device_name
+        normalized["serial_no"] = settings.device_serial
+        normalized["camera_url"] = settings.stream_url
+        normalized["device_api_base"] = settings.device_api_base
+        normalized["allow_customer_control"] = settings.allow_customer_control
+        normalized["snow_threshold"] = float(normalized.get("snow_threshold", settings.snow_threshold))
+
+        mode = str(normalized.get("heater_mode") or settings.heater_mode).lower()
+        normalized["heater_mode"] = mode if mode in {"auto", "manual", "schedule"} else "auto"
+
+        if normalized.get("current_control_source") in {None, ""}:
+            normalized["current_control_source"] = "offline_idle" if normalized.get("offline_mode") else "idle"
+
+        normalized["last_seen_at"] = normalized.get("last_seen_at") or utc_now()
+        normalized["message"] = normalized.get("message") or "Pi backend booted"
+        return normalized
+
     def _save(self) -> None:
+        self._state = self._normalize_state(self._state)
         save_state("device_status", self._state)
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
+            self._state = self._normalize_state(self._state)
             return dict(self._state)
 
     def apply_status(self, payload: StatusPayload | dict[str, Any]) -> dict[str, Any]:
         data = payload.model_dump() if isinstance(payload, StatusPayload) else dict(payload)
         with self._lock:
             self._state.update({k: v for k, v in data.items() if v is not None})
-            self._state["camera_url"] = self._state.get("camera_url") or settings.stream_url
-            self._state["device_api_base"] = settings.device_api_base
-            self._state["allow_customer_control"] = settings.allow_customer_control
             self._state["last_seen_at"] = utc_now()
+            self._state = self._normalize_state(self._state)
             self._save()
             return dict(self._state)
 
@@ -76,6 +95,7 @@ class DeviceRuntimeState:
             if message is not None:
                 self._state["message"] = message
             self._state["last_seen_at"] = utc_now()
+            self._state = self._normalize_state(self._state)
             self._save()
             return dict(self._state)
 
@@ -85,6 +105,7 @@ class DeviceRuntimeState:
             if last_sync_at is not None:
                 self._state["last_schedule_sync_at"] = last_sync_at
             self._state["last_seen_at"] = utc_now()
+            self._state = self._normalize_state(self._state)
             self._save()
             return dict(self._state)
 
@@ -98,6 +119,7 @@ class DeviceRuntimeState:
                 self._state["offline_mode"] = bool(offline_mode)
             if message is not None:
                 self._state["message"] = message
+            self._state = self._normalize_state(self._state)
             self._save()
             return dict(self._state)
 
@@ -107,6 +129,7 @@ class DeviceRuntimeState:
             if current_source == "manual_command" and active_schedule is None:
                 self._state["message"] = note
                 self._state["last_seen_at"] = utc_now()
+                self._state = self._normalize_state(self._state)
                 self._save()
                 return dict(self._state)
 
@@ -125,6 +148,7 @@ class DeviceRuntimeState:
 
             self._state["message"] = note
             self._state["last_seen_at"] = utc_now()
+            self._state = self._normalize_state(self._state)
             self._save()
             return dict(self._state)
 
@@ -168,6 +192,7 @@ class DeviceRuntimeState:
 
             self._state["last_seen_at"] = utc_now()
             self._state["message"] = payload.reason or note
+            self._state = self._normalize_state(self._state)
             self._save()
             return {"state": dict(self._state), "note": note}
 
