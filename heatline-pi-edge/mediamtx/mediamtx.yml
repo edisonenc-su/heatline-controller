@@ -1,0 +1,17 @@
+logLevel: info
+api: yes
+metrics: yes
+pprof: no
+
+hls: yes
+hlsAddress: :8888
+webrtc: yes
+webrtcAddress: :8889
+rtsp: yes
+rtspAddress: :8554
+
+paths:
+  main:
+    source: rtsp://camera-ip/live/0/MAIN
+    sourceOnDemand: yes
+    sourceProtocol: automatic

@@ -1,0 +1,14 @@
+[Unit]
+Description=MediaMTX Stream Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/heatline-pi-edge
+ExecStart=/usr/local/bin/mediamtx /opt/heatline-pi-edge/mediamtx/mediamtx.yml
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

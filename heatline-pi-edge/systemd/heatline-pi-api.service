@@ -1,0 +1,15 @@
+[Unit]
+Description=Heatline Pi Edge API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/heatline-pi-edge/api
+EnvironmentFile=/opt/heatline-pi-edge/.env
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

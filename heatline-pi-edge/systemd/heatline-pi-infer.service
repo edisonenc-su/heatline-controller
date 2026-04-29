@@ -1,0 +1,15 @@
+[Unit]
+Description=Heatline Pi Hailo Inference Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/heatline-pi-edge/infer
+EnvironmentFile=/opt/heatline-pi-edge/.env
+ExecStart=/usr/bin/python3 src/main.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

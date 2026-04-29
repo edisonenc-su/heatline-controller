@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: heatline-mediamtx
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./mediamtx/mediamtx.yml:/mediamtx.yml:ro
+
+  api:
+    image: node:20-bookworm-slim
+    container_name: heatline-pi-api
+    working_dir: /app
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - .env.example
+    command: sh -lc "npm install --omit=dev && node src/server.js"
+    volumes:
+      - ./api:/app
+      - ./shared:/app/shared
