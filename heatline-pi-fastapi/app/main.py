@@ -44,6 +44,7 @@ from .models import (
     RuntimePolicyPayload,
     StatusPayload,
 )
+from .snow_ai_service import snow_ai_service
 from .state import runtime_state
 
 
@@ -65,14 +66,12 @@ def runtime_policy() -> dict:
     )
 
 
-
 def _requester_values(payload: CommandPayload) -> tuple[str | None, str | None]:
     requester = payload.requested_by or None
     return (
         requester.user_id if requester else None,
         requester.user_name if requester else None,
     )
-
 
 
 def _write_command_log(payload: CommandPayload, result: str, note: str) -> None:
@@ -85,7 +84,6 @@ def _write_command_log(payload: CommandPayload, result: str, note: str) -> None:
         requested_by_user_id=user_id,
         requested_by_user_name=user_name,
     )
-
 
 
 def _sync_relay_from_runtime(*, force: bool = False, source: str = "runtime") -> dict:
@@ -103,7 +101,6 @@ def _sync_relay_from_runtime(*, force: bool = False, source: str = "runtime") ->
     }
 
 
-
 def _mark_relay_error(exc: Exception, *, source: str) -> dict:
     relay_status = heater_relay_controller.fail(exc)
     runtime = runtime_state.apply_status(
@@ -116,7 +113,6 @@ def _mark_relay_error(exc: Exception, *, source: str) -> dict:
         "runtime": runtime,
         "relay": relay_status,
     }
-
 
 
 def _restore_runtime_snapshot(previous: dict, message: str) -> dict:
@@ -138,7 +134,6 @@ def _restore_runtime_snapshot(previous: dict, message: str) -> dict:
     )
 
 
-
 def _maybe_request_reboot(payload: CommandPayload) -> None:
     if payload.command_type != "REBOOT":
         return
@@ -156,7 +151,6 @@ def _maybe_request_reboot(payload: CommandPayload) -> None:
             )
 
     threading.Thread(target=_worker, daemon=True).start()
-
 
 
 def _gpio_sync_loop() -> None:
@@ -187,7 +181,6 @@ def _gpio_sync_loop() -> None:
                 last_error = message
 
 
-
 def _start_gpio_sync_thread() -> None:
     global _gpio_sync_thread
     if _gpio_sync_thread and _gpio_sync_thread.is_alive():
@@ -195,7 +188,6 @@ def _start_gpio_sync_thread() -> None:
     _gpio_sync_stop.clear()
     _gpio_sync_thread = threading.Thread(target=_gpio_sync_loop, daemon=True)
     _gpio_sync_thread.start()
-
 
 
 def _stop_gpio_sync_thread() -> None:
@@ -227,19 +219,21 @@ async def lifespan(_: FastAPI):
 
     _start_gpio_sync_thread()
     camera_service.start()
+    snow_ai_service.start()
     central_sync_service.start()
     local_schedule_service.start()
     yield
     _stop_gpio_sync_thread()
     local_schedule_service.stop()
     central_sync_service.stop()
+    snow_ai_service.stop()
     camera_service.stop()
     heater_relay_controller.close()
 
 
 app = FastAPI(
     title="Heatline Raspberry Pi Backend",
-    version="1.3.0",
+    version="1.4.0",
     lifespan=lifespan,
 )
 
@@ -272,6 +266,16 @@ def health_check():
         "offline_mode": snapshot["offline_mode"],
         "active_schedule_name": snapshot.get("active_schedule_name"),
         "relay": heater_relay_controller.status(),
+        "ai": {
+            "enabled": snapshot.get("ai_enabled"),
+            "available": snapshot.get("ai_available"),
+            "model_name": snapshot.get("ai_model_name"),
+            "last_inference_at": snapshot.get("ai_last_inference_at"),
+            "snow_score": snapshot.get("snow_score"),
+            "stable_snow_detected": snapshot.get("stable_snow_detected"),
+            "snow_state": snapshot.get("snow_state"),
+            "control_policy_state": snapshot.get("control_policy_state"),
+        },
     }
 
 

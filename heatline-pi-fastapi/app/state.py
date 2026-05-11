@@ -44,6 +44,15 @@ class DeviceRuntimeState:
             "central_connected": False,
             "local_schedule_count": 0,
             "message": "ready",
+            # --- AI fields ---
+            "ai_available": False,
+            "ai_enabled": settings.hailo_enabled,
+            "ai_model_name": settings.hailo_model_name if settings.hailo_enabled else None,
+            "ai_last_inference_at": None,
+            "ai_decision_reason": None,
+            "snow_score": 0.0,
+            "stable_snow_detected": False,
+            "control_policy_state": "standby",
         }
 
     def _normalize_state(self, state: dict[str, Any] | None) -> dict[str, Any]:
@@ -68,6 +77,16 @@ class DeviceRuntimeState:
 
         normalized["last_seen_at"] = normalized.get("last_seen_at") or utc_now()
         normalized["message"] = normalized.get("message") or "Pi backend booted"
+
+        normalized["ai_enabled"] = bool(normalized.get("ai_enabled", settings.hailo_enabled))
+        normalized["ai_available"] = bool(normalized.get("ai_available", False))
+        normalized["ai_model_name"] = normalized.get("ai_model_name") or (
+            settings.hailo_model_name if settings.hailo_enabled else None
+        )
+        normalized["snow_score"] = float(normalized.get("snow_score", 0.0) or 0.0)
+        normalized["stable_snow_detected"] = bool(normalized.get("stable_snow_detected", False))
+        normalized["control_policy_state"] = str(normalized.get("control_policy_state") or "standby")
+
         return normalized
 
     def _save(self) -> None:
@@ -83,6 +102,53 @@ class DeviceRuntimeState:
         data = payload.model_dump() if isinstance(payload, StatusPayload) else dict(payload)
         with self._lock:
             self._state.update({k: v for k, v in data.items() if v is not None})
+            self._state["last_seen_at"] = utc_now()
+            self._state = self._normalize_state(self._state)
+            self._save()
+            return dict(self._state)
+
+    def apply_ai_status(
+        self,
+        *,
+        ai_available: bool | None = None,
+        ai_enabled: bool | None = None,
+        ai_model_name: str | None = None,
+        snow_detected: bool | None = None,
+        stable_snow_detected: bool | None = None,
+        snow_confidence: float | None = None,
+        snow_score: float | None = None,
+        snow_state: str | None = None,
+        ai_last_inference_at: str | None = None,
+        ai_decision_reason: str | None = None,
+        control_policy_state: str | None = None,
+        message: str | None = None,
+    ) -> dict[str, Any]:
+        with self._lock:
+            if ai_available is not None:
+                self._state["ai_available"] = bool(ai_available)
+            if ai_enabled is not None:
+                self._state["ai_enabled"] = bool(ai_enabled)
+            if ai_model_name is not None:
+                self._state["ai_model_name"] = ai_model_name
+            if snow_detected is not None:
+                self._state["snow_detected"] = bool(snow_detected)
+            if stable_snow_detected is not None:
+                self._state["stable_snow_detected"] = bool(stable_snow_detected)
+            if snow_confidence is not None:
+                self._state["snow_confidence"] = max(0.0, min(1.0, float(snow_confidence)))
+            if snow_score is not None:
+                self._state["snow_score"] = max(0.0, min(1.0, float(snow_score)))
+            if snow_state is not None:
+                self._state["snow_state"] = str(snow_state)
+            if ai_last_inference_at is not None:
+                self._state["ai_last_inference_at"] = ai_last_inference_at
+            if ai_decision_reason is not None:
+                self._state["ai_decision_reason"] = ai_decision_reason
+            if control_policy_state is not None:
+                self._state["control_policy_state"] = str(control_policy_state)
+            if message is not None:
+                self._state["message"] = message
+
             self._state["last_seen_at"] = utc_now()
             self._state = self._normalize_state(self._state)
             self._save()

@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 
 def _to_bool(value: str | None, default: bool = False) -> bool:
@@ -33,27 +33,6 @@ def _build_http_origin(host: str, port: int) -> str:
     return f"http://{host}:{port}"
 
 
-def _inject_basic_auth_to_url(url: str, username: str, password: str) -> str:
-    raw = str(url or "").strip()
-    if not raw:
-        return ""
-
-    parsed = urlsplit(raw)
-    if not parsed.scheme or not parsed.netloc:
-        return raw
-
-    if "@" in parsed.netloc:
-        return raw
-
-    safe_user = quote(username or "", safe="")
-    safe_password = quote(password or "", safe="")
-    auth = safe_user
-    if password:
-        auth = f"{auth}:{safe_password}"
-    netloc = f"{auth}@{parsed.netloc}"
-    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
-
-
 @dataclass
 class Settings:
     pi_api_host: str = os.getenv("PI_API_HOST", "0.0.0.0")
@@ -77,25 +56,17 @@ class Settings:
     stream_host: str = os.getenv("STREAM_HOST", "0.0.0.0")
     stream_port: int = int(os.getenv("STREAM_PORT", "8000"))
     stream_path: str = os.getenv("STREAM_PATH", "/stream.mjpg")
-
-    camera_rtsp_url: str = os.getenv("CAMERA_RTSP_URL", "rtsp://192.168.75.60:554/stream1").strip()
-    camera_rtsp_username: str = os.getenv("CAMERA_RTSP_USERNAME", "").strip()
-    camera_rtsp_password: str = os.getenv("CAMERA_RTSP_PASSWORD", "").strip()
-    camera_rtsp_transport: str = os.getenv("CAMERA_RTSP_TRANSPORT", "tcp").strip().lower() or "tcp"
-    camera_source: str = os.getenv("CAMERA_SOURCE", "rtsp" if os.getenv("CAMERA_RTSP_URL", "").strip() else "auto")
+    camera_source: str = os.getenv("CAMERA_SOURCE", "auto")
     camera_device_index: int = int(os.getenv("CAMERA_DEVICE_INDEX", "0"))
-    camera_width: int = int(os.getenv("CAMERA_WIDTH", "1280"))
-    camera_height: int = int(os.getenv("CAMERA_HEIGHT", "720"))
-    camera_fps: int = int(os.getenv("CAMERA_FPS", "10"))
+    camera_width: int = int(os.getenv("CAMERA_WIDTH", "640"))
+    camera_height: int = int(os.getenv("CAMERA_HEIGHT", "480"))
+    camera_fps: int = int(os.getenv("CAMERA_FPS", "15"))
     camera_rotation: int = int(os.getenv("CAMERA_ROTATION", "0"))
     camera_hflip: bool = _to_bool(os.getenv("CAMERA_HFLIP"), False)
     camera_vflip: bool = _to_bool(os.getenv("CAMERA_VFLIP"), False)
     camera_use_picamera2: bool = _to_bool(os.getenv("CAMERA_USE_PICAMERA2"), True)
-    camera_jpeg_quality: int = int(os.getenv("CAMERA_JPEG_QUALITY", "80"))
+    camera_jpeg_quality: int = int(os.getenv("CAMERA_JPEG_QUALITY", "85"))
     camera_text_overlay: bool = _to_bool(os.getenv("CAMERA_TEXT_OVERLAY"), True)
-    camera_connect_timeout_sec: int = int(os.getenv("CAMERA_CONNECT_TIMEOUT_SEC", "8"))
-    camera_reconnect_interval_sec: float = float(os.getenv("CAMERA_RECONNECT_INTERVAL_SEC", "3.0"))
-    camera_failure_limit: int = int(os.getenv("CAMERA_FAILURE_LIMIT", "20"))
     placeholder_stream: bool = _to_bool(os.getenv("PLACEHOLDER_STREAM"), True)
 
     sensor_simulation: bool = _to_bool(os.getenv("SENSOR_SIMULATION"), True)
@@ -180,24 +151,6 @@ class Settings:
     @property
     def hailo_label_list(self) -> list[str]:
         return [x.strip() for x in self.hailo_labels.split(",") if x.strip()]
-
-    @property
-    def camera_capture_url(self) -> str:
-        if not self.camera_rtsp_url:
-            return ""
-        if self.camera_rtsp_username:
-            return _inject_basic_auth_to_url(
-                self.camera_rtsp_url,
-                self.camera_rtsp_username,
-                self.camera_rtsp_password,
-            )
-        return self.camera_rtsp_url
-
-    @property
-    def camera_source_label(self) -> str:
-        if self.camera_source.lower() == "rtsp":
-            return "rtsp"
-        return self.camera_source.lower()
 
 
 settings = Settings()

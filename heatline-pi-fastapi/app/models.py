@@ -26,6 +26,16 @@ class StatusPayload(BaseModel):
     camera_url: Optional[str] = None
     message: Optional[str] = None
 
+    # --- AI fields ---
+    ai_available: Optional[bool] = None
+    ai_enabled: Optional[bool] = None
+    ai_model_name: Optional[str] = None
+    ai_last_inference_at: Optional[str] = None
+    ai_decision_reason: Optional[str] = None
+    snow_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    stable_snow_detected: Optional[bool] = None
+    control_policy_state: Optional[str] = None
+
 
 class HeartbeatPayload(BaseModel):
     status: Optional[Literal["online", "offline", "warning", "error"]] = "online"
@@ -130,6 +140,16 @@ class DeviceStatusResponse(BaseModel):
     central_connected: bool = False
     local_schedule_count: int = 0
     message: str
+
+    # --- AI fields ---
+    ai_available: bool = False
+    ai_enabled: bool = False
+    ai_model_name: Optional[str] = None
+    ai_last_inference_at: Optional[str] = None
+    ai_decision_reason: Optional[str] = None
+    snow_score: float = 0.0
+    stable_snow_detected: bool = False
+    control_policy_state: str = "standby"
 
 
 class ApiResponse(BaseModel):
